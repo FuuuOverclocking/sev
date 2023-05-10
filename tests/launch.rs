@@ -31,17 +31,25 @@ const CODE: &[u8; 16] = &[
 #[test]
 #[serial]
 fn sev() {
+    // Host
+    // 打开 sev, 查询固件信息
     let mut sev = Firmware::open().unwrap();
     let build = sev.platform_status().unwrap().build;
+    // 导出证书链, 这里是导出了缓存的证书
     let chain = cached_chain::get().expect(
         r#"could not find certificate chain
         export with: sevctl export --full ~/.cache/amd-sev/chain"#,
     );
 
+    // 租户
+    // 生成策略, 开始建立与远程 PSP 的安全通道
     let policy = Policy::default();
     let session = Session::try_from(policy).unwrap();
-    let start = session.start(chain).unwrap();
+    // 从 Host 获取到证书链
+    let start = session.start(chain).unwrap(); // Start 是一个可序列化的结构
 
+    // Host
+    // 启动 VM
     let kvm = Kvm::new().unwrap();
     let vm = kvm.create_vm().unwrap();
 
@@ -64,24 +72,36 @@ fn sev() {
         vm.set_user_memory_region(mem_region).unwrap();
     }
 
+    // 租户
+    // 计算期望的 VM 内存页的测度, 在这里是清零的页面
     let mut session = session.measure().unwrap();
     session.update_data(address_space.as_ref()).unwrap();
 
     let (mut launcher, measurement) = {
+        // Host
+        // INIT, 启动 sev 平台
         let launcher = Launcher::new(vm.as_raw_fd(), sev.as_raw_fd()).unwrap();
+        // LAUNCH_START, 接收租户发送的信息 start, 转发给 PSP
         let mut launcher = launcher.start(start).unwrap();
+        // 加密内存和测量测度
         launcher.update_data(address_space.as_ref()).unwrap();
         let launcher = launcher.measure().unwrap();
         let measurement = launcher.measurement();
         (launcher, measurement)
     };
 
+    // 租户
+    // 接收到测度, 生成 secret
     let session = session.verify(build, measurement).unwrap();
     let secret = session.secret(HeaderFlags::default(), CODE).unwrap();
 
+    // Host
+    // LAUNCH_SECRET, 注入租户提供的 secret
     launcher.inject(&secret, address_space.addr()).unwrap();
-
+    // LAUNCH_FINISH, 令 guest 做好启动准备
     let _handle = launcher.finish().unwrap();
+
+    // KVM 过程
 
     let vcpu = vm.create_vcpu(0).unwrap();
     let mut sregs = vcpu.get_sregs().unwrap();
