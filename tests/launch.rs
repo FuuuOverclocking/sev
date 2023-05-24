@@ -35,7 +35,7 @@ fn sev() {
     // 打开 sev, 查询固件信息
     let mut sev = Firmware::open().unwrap();
     let build = sev.platform_status().unwrap().build;
-    // 导出证书链, 这里是导出了缓存的证书
+    // 导出证书链, 这里是使用缓存的证书
     let chain = cached_chain::get().expect(
         r#"could not find certificate chain
         export with: sevctl export --full ~/.cache/amd-sev/chain"#,
@@ -77,11 +77,12 @@ fn sev() {
     let mut session = session.measure().unwrap();
     session.update_data(address_space.as_ref()).unwrap();
 
+    // Host
     let (mut launcher, measurement) = {
-        // Host
         // INIT, 启动 sev 平台
         let launcher = Launcher::new(vm.as_raw_fd(), sev.as_raw_fd()).unwrap();
         // LAUNCH_START, 接收租户发送的信息 start, 转发给 PSP
+        // 在内核 kvm 代码中, 还进行了 ACTIVATE
         let mut launcher = launcher.start(start).unwrap();
         // 加密内存和测量测度
         launcher.update_data(address_space.as_ref()).unwrap();
